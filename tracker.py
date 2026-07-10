@@ -439,20 +439,25 @@ def push(title: str, body: str, urgent: bool, click: str, buy: str | None = None
         print(f"[DRY-RUN PUSH] {'URGENT ' if urgent else ''}{title}\n"
               f"  {body}\n  click: {click}" + (f"\n  buy:   {buy}" if buy else ""))
         return
-    req = Request(f"https://ntfy.sh/{NTFY_TOPIC}", data=body.encode(), method="POST")
-    req.add_header("Title", title)
-    req.add_header("Priority", "urgent" if urgent else "high")
-    req.add_header("Tags", "rotating_light,soccer" if urgent else "tickets,soccer")
-    req.add_header("Click", click)
+    # ntfy JSON-body API — handles emoji / UTF-8 natively (HTTP headers can't).
+    payload = {
+        "topic": NTFY_TOPIC,
+        "title": title,
+        "message": body,
+        "priority": 5 if urgent else 4,
+        "tags": ["rotating_light", "soccer"] if urgent else ["tickets", "soccer"],
+        "click": click,
+    }
     actions = []
     if buy:
-        actions.append(f"view, Buy now, {buy}")
+        actions.append({"action": "view", "label": "Buy now", "url": buy})
     if PAGES_URL and click != PAGES_URL:
-        actions.append(f"view, Deal board, {PAGES_URL}")
-    elif PAGES_URL and buy:
-        actions.append(f"view, Deal board, {PAGES_URL}")
+        actions.append({"action": "view", "label": "Deal board", "url": PAGES_URL})
     if actions:
-        req.add_header("Actions", "; ".join(actions[:3]))
+        payload["actions"] = actions[:3]
+    data = json.dumps(payload).encode("utf-8")
+    req = Request("https://ntfy.sh", data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
     try:
         urlopen(req, timeout=20).read()
     except Exception as e:
