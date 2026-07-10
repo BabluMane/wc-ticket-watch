@@ -18,7 +18,8 @@ Alert rules — identical for FIFA resale and StubHub:
   FIFA "Cat 1/2", no section .. price <= $3,500               -> ALERT + "verify section"
 
 Env vars:
-  NTFY_TOPIC   (required for pushes; empty = dry-run to stdout)
+  NTFY_TOPIC / TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID  (any/all channels;
+               none set = dry-run to stdout)
   PAGES_URL    (deal board URL; notification click target)
   MATCH_ID=M102  STUBHUB_URL=<event url or empty to disable>
   LMS_MAX=3500 LMS_HOT=3000 RESALE_MAX=3500 RESALE_HOT=3000
@@ -60,6 +61,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 PAGES_URL  = os.environ.get("PAGES_URL", "").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 LMS_MAX       = float(os.environ.get("LMS_MAX", 3500))
 LMS_HOT       = float(os.environ.get("LMS_HOT", 3000))
@@ -434,12 +437,7 @@ def save_state(st: dict):
 
 
 # ----------------------------------------------------------------- notify ---
-def push(title: str, body: str, urgent: bool, click: str, buy: str | None = None):
-    if not NTFY_TOPIC:
-        print(f"[DRY-RUN PUSH] {'URGENT ' if urgent else ''}{title}\n"
-              f"  {body}\n  click: {click}" + (f"\n  buy:   {buy}" if buy else ""))
-        return
-    # ntfy JSON-body API — handles emoji / UTF-8 natively (HTTP headers can't).
+def _push_ntfy(title, body, urgent, click, buy):
     payload = {
         "topic": NTFY_TOPIC,
         "title": title,
@@ -455,13 +453,46 @@ def push(title: str, body: str, urgent: bool, click: str, buy: str | None = None
         actions.append({"action": "view", "label": "Deal board", "url": PAGES_URL})
     if actions:
         payload["actions"] = actions[:3]
-    data = json.dumps(payload).encode("utf-8")
-    req = Request("https://ntfy.sh", data=data, method="POST")
+    req = Request("https://ntfy.sh", data=json.dumps(payload).encode("utf-8"),
+                  method="POST")
     req.add_header("Content-Type", "application/json")
     try:
         urlopen(req, timeout=20).read()
     except Exception as e:
         print(f"!! ntfy push failed: {e}", file=sys.stderr)
+
+
+def _push_telegram(title, body, urgent, click, buy):
+    text = f"{'🚨 ' if urgent else ''}{title}\n{body}"
+    buttons = []
+    if buy:
+        buttons.append({"text": "Buy now", "url": buy})
+    if click:
+        buttons.append({"text": "Deal board", "url": click})
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+               "disable_web_page_preview": True}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": [buttons]}
+    req = Request(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                  data=json.dumps(payload).encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        urlopen(req, timeout=20).read()
+    except Exception as e:
+        print(f"!! telegram push failed: {e}", file=sys.stderr)
+
+
+def push(title: str, body: str, urgent: bool, click: str, buy: str | None = None):
+    sent = False
+    if NTFY_TOPIC:
+        _push_ntfy(title, body, urgent, click, buy)
+        sent = True
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        _push_telegram(title, body, urgent, click, buy)
+        sent = True
+    if not sent:
+        print(f"[DRY-RUN PUSH] {'URGENT ' if urgent else ''}{title}\n"
+              f"  {body}\n  click: {click}" + (f"\n  buy:   {buy}" if buy else ""))
 
 
 def fmt(l: dict) -> str:
