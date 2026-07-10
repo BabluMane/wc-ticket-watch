@@ -1,0 +1,61 @@
+# Place this file at:  .github/workflows/watch.yml  in your repo
+name: M102 ticket watch
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"      # every 15 min (GitHub adds a few min of jitter)
+  workflow_dispatch: {}          # manual trigger from the Actions tab
+
+permissions:
+  contents: write                # commits state.json + index.html (deal board)
+
+concurrency:
+  group: ticket-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-chromium
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Scan
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: python tracker.py
+
+      - name: Publish board + state
+        run: |
+          git config user.name  "ticket-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json index.html || true
+          if ! git diff --cached --quiet; then
+            git commit -m "board $(date -u +%FT%TZ)"
+            git pull --rebase || true
+            git push
+          fi
+
+      - name: Upload debug snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_number }}
+          path: debug/
+          retention-days: 2
